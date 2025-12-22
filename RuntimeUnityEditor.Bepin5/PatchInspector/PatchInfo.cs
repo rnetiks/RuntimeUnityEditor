@@ -1,10 +1,12 @@
 using System.Reflection;
+using HarmonyLib;
 
 namespace RuntimeUnityEditor.Bepin5.PatchInspector
 {
-	internal struct PatchInfo
+	internal class PatchInfo
 	{
-		public string MethodName;
+		public Patch Patch;
+		public string TargetMethodName;
 		public string TargetType;
 		public string PatcherAssembly;
 		public string PatcherNamespace;
