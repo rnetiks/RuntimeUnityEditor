@@ -1,42 +1,48 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 
 namespace RuntimeUnityEditor.Core.Utils
 {
     internal class MovingAverage
     {
+        private readonly long[] _samples;
         private readonly int _windowSize;
-        private readonly Queue<long> _samples;
+        private int _index;
+        private int _count;
         private long _sampleAccumulator;
 
         public MovingAverage(int windowSize = 11)
         {
             _windowSize = windowSize;
-            _samples = new Queue<long>(_windowSize + 1);
+            _samples = new long[windowSize];
         }
-
-        ///// <summary>
-        ///// Highest sample value ever, even if the sample is no longer counted in the average.
-        ///// </summary>
-        //public long PeakValue { get; private set; }
 
         public long GetAverage()
         {
-            if (_samples.Count == 0)
+            if (_count == 0)
                 return 0;
 
-            return _sampleAccumulator / _samples.Count;
+            return _sampleAccumulator / _count;
         }
 
         public void Sample(long newSample)
         {
+            if (_count >= _windowSize)
+                _sampleAccumulator -= _samples[_index];
+            else
+                _count++;
+
             _sampleAccumulator += newSample;
-            _samples.Enqueue(newSample);
+            _samples[_index] = newSample;
+            _index = (_index + 1) % _windowSize;
+        }
 
-            if (_samples.Count > _windowSize)
-                _sampleAccumulator -= _samples.Dequeue();
-
-            //if (PeakValue < newSample)
-            //    PeakValue = newSample;
+        public void Reset()
+        {
+            Array.Clear(_samples, 0, _samples.Length);
+            _index = 0;
+            _count = 0;
+            _sampleAccumulator = 0;
         }
     }
 }

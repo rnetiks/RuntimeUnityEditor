@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using HarmonyLib;
 using RuntimeUnityEditor.Core.Utils;
 using RuntimeUnityEditor.Core.Utils.Abstractions;
@@ -27,12 +28,17 @@ namespace RuntimeUnityEditor.Core.Profiler
         private static readonly GUILayoutOption[] _cRanW2 = { GUILayoutShim.MinWidth(RanW), GUILayoutShim.MaxWidth(RanW) };
         private static readonly GUILayoutOption[] _cTicksW = { GUILayoutShim.MinWidth(50), GUILayoutShim.MaxWidth(50) };
         private static readonly GUILayoutOption[] _cInsW = { GUILayoutShim.MinWidth(50), GUILayoutShim.MaxWidth(50) };
-        private static readonly GUIContent _cColOrder = new GUIContent("#", null, "Relative order of execution in a frame. Methods are called one by one on the main unity thread in this order.\n\nMethods that did not run during this frame are also included, so this number does not equal how many methods were called on this frame.");
-        private static readonly GUIContent _cColRan = new GUIContent("Ran", null, "Left toggle indicates if this method was executed in this frame (all Harmony patches were called, and the original method was called if not disabled by a Harmony patch).\n\nRight toggle indicates if the original method was executed (original method being skipped is usually caused by a false postfix in a Harmony patch)");
-        private static readonly GUIContent _cColTime = new GUIContent("Time", null, "Time spent executing this method (all Harmony patches included).\n\nBy default it's shown in ticks (smallest measurable unit of time). Resolution of ticks depends on Stopwatch.Frequency, but usually 10000 = 1ms.\n\nHigh values will drop FPS. If the value is much higher on some frames it can be felt as the game stuttering.\n\nIn methods running on every frame this should be as low as possible.");
-        private static readonly GUIContent _cColMem = new GUIContent("Mem", null, "Bytes of memory allocated in the managed heap during this method's execution (all Harmony patches included). The value is approximate and might be inaccurate, especially if there is code running on background threads.\n\nHigh values (usually caused by constantly allocating and discarding objects, e.g. using linq queries) will trigger garbage collections, causing the game to randomly stutter. Magnitude of the stutters can be lowered by very fast CPUs and the incremental GC being enabled (only Unity 2019+).\n\nIn methods running on every frame this should be 0 (or as close to 0 as possible).");
+        private static readonly GUIContent _cColOrder = new GUIContent("#", null,
+            "Relative order of execution in a frame. Methods are called one by one on the main unity thread in this order.\n\nMethods that did not run during this frame are also included, so this number does not equal how many methods were called on this frame.");
+        private static readonly GUIContent _cColRan = new GUIContent("Ran", null,
+            "Left toggle indicates if this method was executed in this frame (all Harmony patches were called, and the original method was called if not disabled by a Harmony patch).\n\nRight toggle indicates if the original method was executed (original method being skipped is usually caused by a false postfix in a Harmony patch)");
+        private static readonly GUIContent _cColTime = new GUIContent("Time", null,
+            "Time spent executing this method (all Harmony patches included).\n\nBy default it's shown in ticks (smallest measurable unit of time). Resolution of ticks depends on Stopwatch.Frequency, but usually 10000 = 1ms.\n\nHigh values will drop FPS. If the value is much higher on some frames it can be felt as the game stuttering.\n\nIn methods running on every frame this should be as low as possible.");
+        private static readonly GUIContent _cColMem = new GUIContent("Mem", null,
+            "Bytes of memory allocated in the managed heap during this method's execution (all Harmony patches included). The value is approximate and might be inaccurate, especially if there is code running on background threads.\n\nHigh values (usually caused by constantly allocating and discarding objects, e.g. using linq queries) will trigger garbage collections, causing the game to randomly stutter. Magnitude of the stutters can be lowered by very fast CPUs and the incremental GC being enabled (only Unity 2019+).\n\nIn methods running on every frame this should be 0 (or as close to 0 as possible).");
         private static readonly GUIContent _cColIns = new GUIContent("Num", null, "Number of instances aggregated.");
-        private static readonly GUIContent _cColName = new GUIContent("Full method name", null, "Name format:\nName of GameObject that the component running this method is attached to > Full name of the component and name of the method (OnGUI event type)");
+        private static readonly GUIContent _cColName = new GUIContent("Full method name", null,
+            "Name format:\nName of GameObject that the component running this method is attached to > Full name of the component and name of the method (OnGUI event type)");
         private static readonly WaitForEndOfFrame _waitForEndOfFrame = new WaitForEndOfFrame();
 
         private static readonly Dictionary<long, ProfilerInfo> _data = new Dictionary<long, ProfilerInfo>();
@@ -51,6 +57,26 @@ namespace RuntimeUnityEditor.Core.Profiler
 
         private static Vector2 _scrollPos;
         private static int _singleObjectTreeItemHeight;
+
+        private static readonly List<long> _keysToRemove = new List<long>();
+        private static readonly List<ProfilerInfo> _sortBuffer = new List<ProfilerInfo>();
+        private static readonly Dictionary<AggregateKey, ProfilerInfo> _aggregateCache = new Dictionary<AggregateKey, ProfilerInfo>();
+
+        private static readonly Dictionary<AggregateKey, ProfilerInfo> _aggregateMap = new Dictionary<AggregateKey, ProfilerInfo>();
+
+        private static readonly Comparison<ProfilerInfo> _compareByOrder = (a, b) => a.HighestExecutionOrder.CompareTo(b.HighestExecutionOrder);
+        private static readonly Comparison<ProfilerInfo> _compareByTicks = (a, b) => b.TicksSpent.GetAverage().CompareTo(a.TicksSpent.GetAverage());
+        private static readonly Comparison<ProfilerInfo> _compareByBytes = (a, b) => b.GcBytes.GetAverage().CompareTo(a.GcBytes.GetAverage());
+        private static readonly Comparison<ProfilerInfo> _compareByName = (a, b) => string.CompareOrdinal(a.DisplayName, b.DisplayName);
+
+        private struct AggregateKey : IEquatable<AggregateKey>
+        {
+            public string FullName;
+            public bool Ran;
+
+            public bool Equals(AggregateKey other) => FullName == other.FullName && Ran == other.Ran;
+            public override int GetHashCode() => FullName.GetHashCode() ^ (Ran ? 1 : 0);
+        }
 
         protected override void Initialize(InitSettings initSettings)
         {
@@ -166,41 +192,65 @@ namespace RuntimeUnityEditor.Core.Profiler
                         {
                             GUILayout.BeginHorizontal();
                             {
-                                GUILayout.Label(pd.HighestExecutionOrder.ToString(), _cOrderW); // # called order
+                                if (pd.LastDisplayedOrder != pd.HighestExecutionOrder)
+                                {
+                                    pd.CachedOrderString = pd.HighestExecutionOrder.ToString();
+                                    pd.LastDisplayedOrder = pd.HighestExecutionOrder;
+                                }
+                                GUILayout.Label(pd.CachedOrderString, _cOrderW);
 
                                 var ran = pd.SinceLastRun < 2;
                                 if (!ran && !pd.Owner) _needResort = true;
 
-                                GUILayout.Toggle(ran, GUIContent.none); // enabled
+                                GUILayout.Toggle(ran, GUIContent.none);
                                 if (!_aggregation)
-                                    GUILayout.Toggle(pd.OriginalRan, GUIContent.none, _cRanW2); // enabled
+                                    GUILayout.Toggle(pd.OriginalRan, GUIContent.none, _cRanW2);
                                 else
                                     GUILayout.Space(RanW + 4);
 
                                 var ticks = pd.TicksSpent.GetAverage();
+                                if (pd.LastDisplayedTicks != ticks)
+                                {
+                                    pd.CachedTicksString = ticks.ToString();
+                                    pd.CachedMsString = ConvertTicksToMs(ticks).ToString("F2") + "ms";
+                                    pd.LastDisplayedTicks = ticks;
+                                }
+
                                 var ms = ConvertTicksToMs(ticks);
                                 if (ms >= 0.2f) GUI.color = Color.red;
                                 else if (ms >= 0.1f) GUI.color = Color.yellow;
-                                GUILayout.Label(_msTime ? ms.ToString("F2") + "ms" : ticks.ToString(), _cTicksW);
+                                GUILayout.Label(_msTime ? pd.CachedMsString : pd.CachedTicksString, _cTicksW);
                                 GUI.color = origColor;
 
                                 var bytes = pd.GcBytes.GetAverage();
+                                if (pd.LastDisplayedBytes != bytes)
+                                {
+                                    pd.CachedBytesString = bytes.ToString();
+                                    pd.LastDisplayedBytes = bytes;
+                                }
+
                                 if (bytes > 100) GUI.color = Color.red;
                                 else if (bytes > 50) GUI.color = Color.yellow;
-                                GUILayout.Label(bytes.ToString(), _cGcW);
+                                GUILayout.Label(pd.CachedBytesString, _cGcW);
                                 GUI.color = origColor;
 
                                 if (_aggregation)
                                 {
                                     var num = pd.Instances;
+                                    if (pd.LastDisplayedInstances != num)
+                                    {
+                                        pd.CachedInstancesString = num.ToString();
+                                        pd.LastDisplayedInstances = num;
+                                    }
+
                                     if (num > 100) GUI.color = Color.red;
                                     else if (num > 20) GUI.color = Color.yellow;
-                                    GUILayout.Label(num.ToString(), _cInsW);
+                                    GUILayout.Label(pd.CachedInstancesString, _cInsW);
                                     GUI.color = origColor;
                                 }
 
                                 GUI.color = dispNameColor;
-                                GUILayout.Label(pd.DisplayName, IMGUIUtils.LayoutOptionsExpandWidthTrue); //fullname
+                                GUILayout.Label(pd.DisplayName, IMGUIUtils.LayoutOptionsExpandWidthTrue);
                                 GUI.color = origColor;
 
                                 GUILayout.FlexibleSpace();
@@ -286,8 +336,8 @@ namespace RuntimeUnityEditor.Core.Profiler
                 try
                 {
                     _hi.Patch(original: hit,
-                              prefix: new HarmonyMethod(typeof(ProfilerWindow), nameof(Prefix)) { priority = int.MaxValue },
-                              postfix: new HarmonyMethod(typeof(ProfilerWindow), nameof(Postfix)) { priority = int.MinValue });
+                        prefix: new HarmonyMethod(typeof(ProfilerWindow), nameof(Prefix)) { priority = int.MaxValue },
+                        postfix: new HarmonyMethod(typeof(ProfilerWindow), nameof(Postfix)) { priority = int.MinValue });
                 }
                 catch (Exception e)
                 {
@@ -313,17 +363,20 @@ namespace RuntimeUnityEditor.Core.Profiler
 
                 if (!_pause)
                 {
-                    foreach (var info in _data.ToList())
+                    foreach (var info in _data)
                     {
                         if (info.Value.Owner == null)
+                            _keysToRemove.Add(info.Key);
+                        else
                         {
-                            _data.Remove(info.Key);
-                            continue;
+                            info.Value.SinceLastRun++;
+                            if (_needResort)
+                                info.Value.HighestExecutionOrder = info.Value.ExecutionOrder;
                         }
-
-                        info.Value.SinceLastRun++;
-                        if (_needResort) info.Value.HighestExecutionOrder = info.Value.ExecutionOrder;
                     }
+
+                    for (var i = 0; i < _keysToRemove.Count; i++)
+                        _data.Remove(_keysToRemove[i]);
                 }
 
                 if (_needResort || _aggregation || prevAggregation != _aggregation)
@@ -334,26 +387,61 @@ namespace RuntimeUnityEditor.Core.Profiler
 
                     if (_aggregation)
                     {
-                        infos = infos
-                            .GroupBy(x => new KeyValuePair<string, bool>(x.FullName, x.SinceLastRun < 2))
-                            .Select(group =>
-                                group
-                                    .Aggregate(new ProfilerInfo(group.First(), group.First().FullName),
-                                (a, b) => ProfilerInfo.Merge(a, b))
-                                );
+                        foreach (var kvp in _aggregateCache)
+                        {
+                            var agg = kvp.Value;
+                            agg.TicksSpent.Reset();
+                            agg.GcBytes.Reset();
+                            agg.Instances = 0;
+                            agg.HighestExecutionOrder = 0;
+                            agg.ExecutionOrderDirect = 0;
+                            agg.SinceLastRun = uint.MaxValue;
+                        }
+
+                        foreach (var kvp in _data)
+                        {
+                            var info = kvp.Value;
+                            var key = new AggregateKey { FullName = info.FullName, Ran = info.SinceLastRun < 2 };
+
+                            if (!_aggregateCache.TryGetValue(key, out var agg))
+                            {
+                                agg = new ProfilerInfo(info, info.FullName);
+                                _aggregateCache[key] = agg;
+                            }
+
+                            agg.TicksSpent.Sample(agg.TicksSpent.GetAverage() + info.TicksSpent.GetAverage());
+                            agg.GcBytes.Sample(agg.GcBytes.GetAverage() + info.GcBytes.GetAverage());
+                            agg.Instances++;
+
+                            if (info.ExecutionOrder > agg.ExecutionOrderDirect)
+                                agg.ExecutionOrderDirect = info.ExecutionOrder;
+                            if (info.HighestExecutionOrder > agg.HighestExecutionOrder)
+                                agg.HighestExecutionOrder = info.HighestExecutionOrder;
+                            if (info.SinceLastRun < agg.SinceLastRun)
+                                agg.SinceLastRun = info.SinceLastRun;
+                        }
+
+                        _dataDisplay.Clear();
+                        foreach (var kvp in _aggregateCache)
+                        {
+                            if (kvp.Value.Instances > 0)  // Only show aggregates that had data this frame
+                                _dataDisplay.Add(kvp.Value);
+                        }
+                    }
+                    else
+                    {
+                        _dataDisplay.Clear();
+                        foreach (var kvp in _data)
+                            _dataDisplay.Add(kvp.Value);
                     }
 
-                    _dataDisplay.AddRange(infos.OrderBy<ProfilerInfo, object>(x =>
-                        {
-                            switch (_ordering)
-                            {
-                                case 0: return x.HighestExecutionOrder;
-                                case 1: return -x.TicksSpent.GetAverage();
-                                case 2: return -x.GcBytes.GetAverage();
-                                case 3: return x.DisplayName;
-                                default: throw new ArgumentOutOfRangeException("unknown ordering " + _ordering);
-                            }
-                        }));
+                    switch (_ordering)
+                    {
+                        case 0: _dataDisplay.Sort(_compareByOrder); break;
+                        case 1: _dataDisplay.Sort(_compareByTicks); break;
+                        case 2: _dataDisplay.Sort(_compareByBytes); break;
+                        case 3: _dataDisplay.Sort(_compareByName); break;
+                    }
                 }
 
                 _needResort = false;
@@ -404,6 +492,19 @@ namespace RuntimeUnityEditor.Core.Profiler
             public bool OriginalRan;
 
             public bool PostfixRan;
+
+            public string CachedTicksString;
+            public string CachedMsString;
+            public string CachedBytesString;
+            public string CachedOrderString;
+            public string CachedInstancesString;
+
+            public long LastDisplayedTicks = -1;
+            public long LastDisplayedBytes = -1;
+            public int LastDisplayedOrder = -1;
+            public uint LastDisplayedInstances = 0;
+
+            public int ExecutionOrderDirect { get => _executionOrder; set => _executionOrder = value; }
 
 
             public ProfilerInfo(MethodBase method, MonoBehaviour owner, EventType guiEvent = (EventType)(-1))
