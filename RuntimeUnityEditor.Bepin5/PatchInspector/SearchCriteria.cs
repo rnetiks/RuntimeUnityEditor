@@ -6,6 +6,8 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
 		public string Class;
 		public string Namespace;
 		public string Text;
+		public string File;
+		
 		public bool IsStructured;
 	}
 }

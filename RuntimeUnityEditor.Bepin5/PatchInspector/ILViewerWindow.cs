@@ -35,7 +35,7 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
             Enabled = true;
             DisplayType = FeatureDisplayType.Hidden;
             DefaultScreenPosition = ScreenPartition.CenterUpper;
-            Title = $"IL Code: {_method.DeclaringType?.Name}.{_method.Name}";
+            Title = $"Code: {_method.DeclaringType?.Name}.{_method.Name}";
 
             _headingGc = new GUIContent(_method.FullDescription(), null, _method.GetFancyDescription());
 
@@ -65,6 +65,7 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
 
                         if (GUILayout.Button($" [Original method] {_method.Name}", GUI.skin.label, IMGUIUtils.LayoutOptionsExpandWidthTrue))
                         {
+                            variant = false;
                             if (IMGUIUtils.IsMouseRightClick())
                             {
                                 ContextMenu.Instance.Show(_method, null, "[MethodInfo] " + _method?.Name, null, null);
@@ -111,6 +112,7 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
                                 var patchName = $"[{patch.PatchType}] {patch.PatchMethod.DeclaringType?.Name}.{patch.PatchMethod.Name}";
                                 if (GUILayout.Button(patchName + $"\nPriority: {patch.Priority} | {patch.PatcherNamespace}", GUI.skin.label, IMGUIUtils.LayoutOptionsExpandWidthTrue))
                                 {
+                                    variant = false;
                                     if (IMGUIUtils.IsMouseRightClick())
                                     {
                                         ContextMenu.Instance.Show(patch.PatchMethod, null, "[MethodInfo] " + patch.PatchMethod?.Name, null, null);
@@ -135,7 +137,8 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
                 GUILayout.BeginVertical(GUI.skin.box, GUILayoutShim.ExpandHeight(true), GUILayoutShim.ExpandWidth(true));
                 if (_selectedPatchIndex == -1)
                 {
-                    GUILayout.Label("IL Code for the Original Method (target being patched)", IMGUIUtils.EmptyLayoutOptions);
+                    GUILayout.Label("Code for the Original Method (target being patched)", IMGUIUtils.EmptyLayoutOptions);
+                    
                     _ilScrollPosition = GUILayout.BeginScrollView(_ilScrollPosition, GUILayoutShim.ExpandHeight(true));
                     GUILayout.TextArea(_originalIL, IMGUIUtils.EmptyLayoutOptions);
                     GUILayout.EndScrollView();
@@ -149,7 +152,7 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
                         GUILayout.Space(3);
 
                         var patchName = $"[{selectedPatch.PatchType}] {selectedPatch.PatchMethod.DeclaringType?.Name}.{selectedPatch.PatchMethod.Name}";
-                        GUILayout.Label($"IL Code for: {patchName}", IMGUIUtils.LayoutOptionsExpandWidthTrue);
+                        GUILayout.Label($"Code for: {patchName}", IMGUIUtils.LayoutOptionsExpandWidthTrue);
 
                         if (GUILayout.Button("Inspect", IMGUIUtils.LayoutOptionsExpandWidthFalse))
                             Inspector.Instance.Push(new InstanceStackEntry(selectedPatch, patchName), true);
@@ -158,9 +161,23 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
                     }
                     GUILayout.EndHorizontal();
 
+                    GUILayout.BeginHorizontal();
+                    if (GUILayout.Button("IL Code"))
+                    {
+                        variant = false;
+                    }
+                    if (GUILayout.Button("C# Code"))
+                    {
+                        if (string.IsNullOrEmpty(selectedPatch.CSCode))
+                            selectedPatch.CSCode = Disassembler.Decompile((MethodInfo)selectedPatch.PatchMethod);
+                        variant = true;
+                    }
+
+                    GUILayout.EndHorizontal();
+
                     _ilScrollPosition = GUILayout.BeginScrollView(_ilScrollPosition, GUILayoutShim.ExpandHeight(true));
 
-                    GUILayout.TextArea(selectedPatch.ILCode, IMGUIUtils.EmptyLayoutOptions);
+                    GUILayout.TextArea(variant ? selectedPatch.CSCode : selectedPatch.ILCode, IMGUIUtils.EmptyLayoutOptions);
 
                     GUILayout.EndScrollView();
                 }
@@ -172,6 +189,8 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
             }
             GUILayout.EndHorizontal();
         }
+
+        private bool variant = false;
 
         private void RefreshPatchList()
         {

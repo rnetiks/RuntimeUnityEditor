@@ -9,6 +9,7 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
 		public MethodBase PatchMethod;
 		public string PatcherNamespace;
 		public string ILCode;
+		public string CSCode;
 		public int Priority;
 		public bool IsEnabled;
 		public HarmonyMethod HarmonyPatch;

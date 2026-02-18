@@ -264,6 +264,8 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
                         criteria.Class = part.Substring(5);
                     else if (part.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase))
                         criteria.Namespace = part.Substring(10);
+                    else if (part.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                        criteria.File = part.Substring(5);
                     else if (!part.Contains(":"))
                         criteria.Text = part;
                 }
@@ -292,6 +294,9 @@ namespace RuntimeUnityEditor.Bepin5.PatchInspector
 
                 if (!string.IsNullOrEmpty(criteria.Namespace))
                     matches &= method.DeclaringType?.Namespace?.IndexOf(criteria.Namespace, StringComparison.OrdinalIgnoreCase) >= 0;
+                
+                if(!string.IsNullOrEmpty(criteria.File))
+                    matches &= method.DeclaringType?.Assembly?.Location.IndexOf(criteria.File, StringComparison.OrdinalIgnoreCase) >= 0;
 
                 if (!string.IsNullOrEmpty(criteria.Text))
                 {

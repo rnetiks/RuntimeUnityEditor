@@ -106,6 +106,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Windows\REPL\REPLWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Windows\REPL\Suggestion.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Windows\REPL\SuggestionKind.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Windows\REPL\TextEditor.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Windows\REPL\TypeHelper.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Windows\Taskbar.cs" />
   </ItemGroup>
